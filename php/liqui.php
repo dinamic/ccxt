@@ -700,7 +700,7 @@ class liqui extends Exchange {
         );
         // no docs on the $tag, yet...
         if ($tag !== null) {
-            throw new ExchangeError ($this->id . ' withdraw() does not support the $tag argument yet due to a lack of docs on withdrawing with $tag/memo on behalf of the exchange.');
+            throw new ExchangeError ($this->id . ' withdraw() does not support the $tag argument yet due to a lack of docs on withdrawing with tag/memo on behalf of the exchange.');
         }
         $response = $this->privatePostWithdrawCoin (array_merge ($request, $params));
         return array (
@@ -805,6 +805,8 @@ class liqui extends Exchange {
                 $exact = $this->exceptions['exact'];
                 if (is_array ($exact) && array_key_exists ($code, $exact)) {
                     throw new $exact[$code] ($feedback);
+                } else if (is_array ($exact) && array_key_exists ($message, $exact)) {
+                    throw new $exact[$message] ($feedback);
                 }
                 $broad = $this->exceptions['broad'];
                 $broadKey = $this->findBroadlyMatchedKey ($broad, $message);

@@ -46,6 +46,7 @@ class coinbase (Exchange):
                 'fetchOpenOrders': False,
                 'fetchOrder': False,
                 'fetchOrderBook': False,
+                'fetchL2OrderBook': False,
                 'fetchOrders': False,
                 'fetchTicker': True,
                 'fetchTickers': False,
@@ -169,20 +170,9 @@ class coinbase (Exchange):
         data = response['data']
         return self.parse8601(data['iso'])
 
-    def load_accounts(self, reload=False):
-        if reload:
-            self.accounts = self.fetch_accounts()
-        else:
-            if self.accounts:
-                return self.accounts
-            else:
-                self.accounts = self.fetch_accounts()
-                self.accountsById = self.index_by(self.accounts, 'id')
-        return self.accounts
-
-    def fetch_accounts(self):
+    def fetch_accounts(self, params={}):
         self.load_markets()
-        response = self.privateGetAccounts()
+        response = self.privateGetAccounts(params)
         return response['data']
 
     def fetch_my_sells(self, symbol=None, since=None, limit=None, params={}):

@@ -34,10 +34,12 @@ class bitfinex (Exchange):
             # new metainfo interface
             'has': {
                 'CORS': False,
+                'cancelAllOrders': True,
                 'createDepositAddress': True,
                 'deposit': True,
                 'fetchClosedOrders': True,
                 'fetchDepositAddress': True,
+                'fetchTradingFee': True,
                 'fetchTradingFees': True,
                 'fetchFundingFees': True,
                 'fetchMyTrades': True,
@@ -69,7 +71,7 @@ class bitfinex (Exchange):
                 'api': 'https://api.bitfinex.com',
                 'www': 'https://www.bitfinex.com',
                 'doc': [
-                    'https://bitfinex.readme.io/v1/docs',
+                    'https://docs.bitfinex.com/v1/docs',
                     'https://github.com/bitfinexcom/bitfinex-api-node',
                 ],
             },
@@ -289,6 +291,7 @@ class bitfinex (Exchange):
                 'SPK': 'SPANK',
                 'STJ': 'STORJ',
                 'YYW': 'YOYOW',
+                'UST': 'USDT',
                 'UTN': 'UTNP',
             },
             'exceptions': {
@@ -383,6 +386,10 @@ class bitfinex (Exchange):
                     'ZRX': 'zrx',
                     'XTZ': 'tezos',
                 },
+                'orderTypes': {
+                    'limit': 'exchange limit',
+                    'market': 'exchange market',
+                },
             },
         })
 
@@ -408,6 +415,28 @@ class bitfinex (Exchange):
     def fetch_trading_fees(self, params={}):
         self.load_markets()
         response = self.privatePostSummary(params)
+        #
+        #     {
+        #         time: '2019-02-20T15:50:19.152000Z',
+        #         trade_vol_30d: [
+        #             {
+        #                 curr: 'Total(USD)',
+        #                 vol: 0,
+        #                 vol_maker: 0,
+        #                 vol_BFX: 0,
+        #                 vol_BFX_maker: 0,
+        #                 vol_ETHFX: 0,
+        #                 vol_ETHFX_maker: 0
+        #             }
+        #         ],
+        #         fees_funding_30d: {},
+        #         fees_funding_total_30d: 0,
+        #         fees_trading_30d: {},
+        #         fees_trading_total_30d: 0,
+        #         maker_fee: 0.001,
+        #         taker_fee: 0.002
+        #     }
+        #
         return {
             'info': response,
             'maker': self.safe_float(response, 'maker_fee'),
@@ -485,11 +514,17 @@ class bitfinex (Exchange):
                 currency = balance['currency']
                 uppercase = currency.upper()
                 uppercase = self.common_currency_code(uppercase)
-                account = self.account()
-                account['free'] = float(balance['available'])
-                account['total'] = float(balance['amount'])
-                account['used'] = account['total'] - account['free']
-                result[uppercase] = account
+                # bitfinex had BCH previously, now it's BAB, but the old
+                # BCH symbol is kept for backward-compatibility
+                # we need a workaround here so that the old BCH balance
+                # would not override the new BAB balance(BAB is unified to BCH)
+                # https://github.com/ccxt/ccxt/issues/4989
+                if not(uppercase in list(result.keys())):
+                    account = self.account()
+                    account['free'] = float(balance['available'])
+                    account['total'] = float(balance['amount'])
+                    account['used'] = account['total'] - account['free']
+                    result[uppercase] = account
         return self.parse_balance(result)
 
     def fetch_order_book(self, symbol, limit=None, params={}):
@@ -575,6 +610,8 @@ class bitfinex (Exchange):
             feeCurrency = self.safe_string(trade, 'fee_currency')
             if feeCurrency in self.currencies_by_id:
                 feeCurrency = self.currencies_by_id[feeCurrency]['code']
+            else:
+                feeCurrency = self.common_currency_code(feeCurrency)
             fee = {
                 'cost': feeCost,
                 'currency': feeCurrency,
@@ -621,15 +658,11 @@ class bitfinex (Exchange):
 
     def create_order(self, symbol, type, side, amount, price=None, params={}):
         self.load_markets()
-        orderType = type
-        if (type == 'limit') or (type == 'market'):
-            orderType = 'exchange ' + type
-        amount = self.amount_to_precision(symbol, amount)
         order = {
             'symbol': self.market_id(symbol),
-            'amount': amount,
             'side': side,
-            'type': orderType,
+            'amount': self.amount_to_precision(symbol, amount),
+            'type': self.safe_string(self.options['orderTypes'], type, type),
             'ocoorder': False,
             'buy_price_oco': 0,
             'sell_price_oco': 0,
@@ -641,9 +674,30 @@ class bitfinex (Exchange):
         result = self.privatePostOrderNew(self.extend(order, params))
         return self.parse_order(result)
 
+    def edit_order(self, id, symbol, type, side, amount=None, price=None, params={}):
+        self.load_markets()
+        order = {
+            'order_id': id,
+        }
+        if price is not None:
+            order['price'] = self.price_to_precision(symbol, price)
+        if amount is not None:
+            order['amount'] = self.amount_to_precision(symbol, amount)
+        if symbol is not None:
+            order['symbol'] = self.market_id(symbol)
+        if side is not None:
+            order['side'] = side
+        if type is not None:
+            order['type'] = self.safe_string(self.options['orderTypes'], type, type)
+        result = self.privatePostOrderCancelReplace(self.extend(order, params))
+        return self.parse_order(result)
+
     def cancel_order(self, id, symbol=None, params={}):
         self.load_markets()
         return self.privatePostOrderCancel({'order_id': int(id)})
+
+    def cancel_all_orders(self, symbol=None, params={}):
+        return self.privatePostOrderCancelAll(params)
 
     def parse_order(self, order, market=None):
         side = order['side']
@@ -915,8 +969,8 @@ class bitfinex (Exchange):
                 'nonce': str(nonce),
                 'request': request,
             }, query)
-            query = self.json(query)
-            query = self.encode(query)
+            body = self.json(query)
+            query = self.encode(body)
             payload = base64.b64encode(query)
             secret = self.encode(self.secret)
             signature = self.hmac(payload, secret, hashlib.sha384)
